@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+vc_pipeline.db
+vc_pipeline.db-journal
+.DS_Store
+.pytest_cache/
