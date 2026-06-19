@@ -53,7 +53,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rebuild",
         action="store_true",
-        help="Rebuild pipeline schema, re-import CSV, and run Stages 1-2 fresh.",
+        help=(
+            "Wipe all pipeline tables (including raw_import), re-import CSV, "
+            "and run Stages 1–4 end to end (scores are persisted automatically)."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -79,10 +82,11 @@ if __name__ == "__main__":
 
     try:
         if args.rebuild:
-            rebuild_pipeline_schema(clear_staging=True)
-            run_stage1(csv_path=args.csv, force_reimport=True)
-            print()
-            run_stage2()
+            run_full_pipeline(
+                csv_path=args.csv,
+                rebuild=True,
+                write_scores=True,
+            )
         elif args.sector_inference:
             create_database()
             run_sector_inference()

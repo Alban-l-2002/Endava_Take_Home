@@ -76,8 +76,16 @@ Each stage is independently executable and testable. `main.py` orchestrates the 
 **Full pipeline** (import only if staging is empty, then run all stages):
 
 ```bash
-python -m src.main
+python -m src.main --write-scores
 ```
+
+**Full rebuild** (wipe all tables, re-import CSV, run Stages 1–4 end to end):
+
+```bash
+python -m src.main --rebuild
+```
+
+Requires `ANTHROPIC_API_KEY` in `.env` (Stages 2–3 call Claude). Writes scores to the database and CSV exports to `outputs/`.
 
 **Single stage via main:**
 
@@ -108,7 +116,7 @@ Stage 4 writes analyst-ready CSV exports to `outputs/`:
 | `duplicate_review_queue.csv` | Suspected duplicate pairs, side by side |
 | `import_exceptions.csv` | Rows rejected at import, with reasons |
 
-To populate the database and generate outputs end to end:
+To populate the database and generate outputs end to end (without wiping existing data):
 
 ```bash
 python -m src.main --write-scores
