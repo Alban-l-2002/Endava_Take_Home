@@ -27,7 +27,7 @@ flowchart LR
 
     subgraph S3["Stage 3 — Score"]
         SCORES["vc_opportunity_scores\n(6 dimensions)"]
-        PRIORITY["vc_opportunity_priority\n(planned)"]
+        PRIORITY["vc_opportunity_priority\n(band + confidence)"]
     end
 
     subgraph REVIEW["Analyst review (throughout)"]
@@ -36,7 +36,7 @@ flowchart LR
         FLAGS["vc_opportunities\nrequires_review flags"]
     end
 
-    subgraph S4["Stage 4 — Outputs (planned)"]
+    subgraph S4["Stage 4 — Outputs"]
         OUT["Review queues\n& operational exports"]
     end
 
@@ -436,7 +436,7 @@ flowchart TD
 | Missing sector inference | AI inference | No deterministic source; flagged with confidence |
 | Sector / geography / stage / referral scoring | Deterministic | Predictable, auditable matrix |
 | Traction / founder scoring | AI-assisted | Requires judgement on free-text; `based_on_inferred = 1` |
-| Priority band assignment | Deterministic (planned) | Sum of boolean dimension scores |
+| Priority band assignment | Deterministic | Sum of boolean dimension scores |
 
 **Principle:** AI is used only where rules cannot decide. Every AI-derived value carries a confidence rating and an audit row — it never silently enters the pipeline as fact.
 

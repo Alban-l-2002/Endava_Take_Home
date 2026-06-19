@@ -32,7 +32,7 @@ Full Mermaid diagrams (data flow, routing decision trees, normalisation flow, sc
 
 ```
 CSV → raw_import → classify & route → vc_opportunities | vc_opportunity_exceptions
-     → normalise (+ audit) → score (6 dimensions) → priority (planned) → outputs (planned)
+     → normalise (+ audit) → score (6 dimensions) → priority bands → CSV outputs
 ```
 
 ## Why a raw staging table?
