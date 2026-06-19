@@ -172,7 +172,7 @@ SECTOR_INFERENCE_OPTIONS: tuple[str, ...] = (
 
 # Stage 3 scoring — qualifying values (deterministic dimensions).
 SCORING_SECTOR_POINTS = 25
-SCORING_TRACTION_POINTS = 15
+SCORING_TRACTION_POINTS = 20
 SCORING_GEOGRAPHY_POINTS = 15
 SCORING_STAGE_POINTS = 15
 SCORING_FOUNDER_POINTS = 15
@@ -197,3 +197,17 @@ SCORING_QUALIFYING_STAGES: frozenset[str] = frozenset({"Seed", "Series A"})
 SCORING_QUALIFYING_REFERRAL_SOURCES: frozenset[str] = frozenset(
     {"Warm intro", "Partner referral"}
 )
+
+# Stage 3 priority aggregation.
+# Total possible across all 6 dimensions.
+SCORING_DIMENSIONS_POSSIBLE = 6
+
+# Mandatory thesis fields. If any is missing after normalisation, the opportunity
+# cannot be fairly scored against the investment thesis and is marked Incomplete
+# (rather than given an artificially low score). Strength signals (traction,
+# founder, referral) are NOT mandatory — their absence simply scores 0 points.
+SCORING_MANDATORY_FIELDS: tuple[str, ...] = ("sector", "geography", "stage")
+
+# Priority band thresholds (inclusive lower bounds), applied to the total score.
+PRIORITY_HIGH_THRESHOLD = 75
+PRIORITY_MEDIUM_THRESHOLD = 50

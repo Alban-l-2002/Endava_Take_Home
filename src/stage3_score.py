@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -15,6 +16,9 @@ except ImportError:
     pass
 
 from src.classification_rules import (
+    PRIORITY_HIGH_THRESHOLD,
+    PRIORITY_MEDIUM_THRESHOLD,
+    SCORING_DIMENSIONS_POSSIBLE,
     SCORING_FOUNDER_POINTS,
     SCORING_GEOGRAPHY_POINTS,
     SCORING_QUALIFYING_GEOGRAPHIES,
@@ -51,9 +55,28 @@ SELECT
     stage,
     traction,
     founder_background,
-    referral_source
+    referral_source,
+    requires_review,
+    requires_normalisation_review
 FROM vc_opportunities
 ORDER BY opportunity_id
+"""
+
+PriorityBand = Literal["High", "Medium", "Low", "Incomplete"]
+ConfidenceTier = Literal["High", "Medium", "Low"]
+
+DELETE_PRIORITY_SQL = "DELETE FROM vc_opportunity_priority"
+
+INSERT_PRIORITY_SQL = """
+INSERT INTO vc_opportunity_priority (
+    opportunity_id,
+    total_score,
+    priority_band,
+    confidence_tier,
+    dimensions_scored,
+    dimensions_possible,
+    score_completeness_pct
+) VALUES (?, ?, ?, ?, ?, ?, ?)
 """
 
 SELECT_SECTOR_INFERRED_OPPORTUNITY_IDS_SQL = """
@@ -143,15 +166,41 @@ class DimensionReport:
 
 
 @dataclass
+class OpportunityPriority:
+    opportunity_id: int
+    total_score: int
+    priority_band: PriorityBand
+    confidence_tier: ConfidenceTier
+    dimensions_scored: int
+    dimensions_possible: int
+    score_completeness_pct: float
+
+
+@dataclass
 class Stage3ScoreResult:
     records_processed: int
     scores_computed: int
     dimension_reports: dict[ScoreDimension, DimensionReport]
+    priorities: list[OpportunityPriority] = field(default_factory=list)
     written_to_database: bool = False
 
     @property
     def scores_inserted(self) -> int:
         return self.scores_computed if self.written_to_database else 0
+
+    @property
+    def band_counts(self) -> dict[str, int]:
+        counts = {"High": 0, "Medium": 0, "Low": 0, "Incomplete": 0}
+        for priority in self.priorities:
+            counts[priority.priority_band] += 1
+        return counts
+
+    @property
+    def confidence_counts(self) -> dict[str, int]:
+        counts = {"High": 0, "Medium": 0, "Low": 0}
+        for priority in self.priorities:
+            counts[priority.confidence_tier] += 1
+        return counts
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +214,83 @@ def _case_insensitive_match(value: str, allowed: frozenset[str]) -> bool:
 
 def _exact_match(value: str, allowed: frozenset[str]) -> bool:
     return value.strip() in allowed
+
+
+def assign_priority_band(total_score: int, mandatory_fields_present: bool) -> PriorityBand:
+    """Map a total score to a priority band, per the investment-thesis matrix.
+
+    Records missing a mandatory thesis field cannot be fairly scored, so they are
+    marked Incomplete rather than given an artificially low band.
+    """
+    if not mandatory_fields_present:
+        return "Incomplete"
+    if total_score >= PRIORITY_HIGH_THRESHOLD:
+        return "High"
+    if total_score >= PRIORITY_MEDIUM_THRESHOLD:
+        return "Medium"
+    return "Low"
+
+
+def assign_confidence_tier(
+    requires_review: int,
+    requires_normalisation_review: int,
+) -> ConfidenceTier:
+    """Rate how much trust to place in the recommendation.
+
+    Ties to existing review flags rather than inventing new signals:
+    - Low: the record is flagged for analyst review (missing/ambiguous data,
+      suspected duplicate, or sector pending inference) — recommendation is provisional.
+    - Medium: a value was AI-corrected during normalisation but no review is outstanding.
+    - High: fully deterministic, clean data.
+    """
+    if requires_review:
+        return "Low"
+    if requires_normalisation_review:
+        return "Medium"
+    return "High"
+
+
+def build_priorities(
+    opportunity_rows: list[Any],
+    scores: list[DimensionScore],
+) -> list[OpportunityPriority]:
+    """Aggregate per-dimension scores into one priority recommendation per opportunity."""
+    totals: dict[int, int] = defaultdict(int)
+    counts: dict[int, int] = defaultdict(int)
+    for score in scores:
+        totals[score.opportunity_id] += score.points_awarded
+        counts[score.opportunity_id] += 1
+
+    priorities: list[OpportunityPriority] = []
+    for row in opportunity_rows:
+        # Row layout matches SELECT_OPPORTUNITIES_FOR_SCORING_SQL:
+        # 0 id, 1 sector, 2 geography, 3 stage, 4 traction, 5 founder, 6 referral,
+        # 7 requires_review, 8 requires_normalisation_review
+        opportunity_id = row[0]
+        sector, geography, stage = row[1], row[2], row[3]
+        requires_review = row[7]
+        requires_normalisation_review = row[8]
+
+        mandatory_present = all(is_present(value) for value in (sector, geography, stage))
+        total_score = totals[opportunity_id]
+        dimensions_scored = counts[opportunity_id]
+        completeness = round(dimensions_scored / SCORING_DIMENSIONS_POSSIBLE * 100, 1)
+
+        priorities.append(
+            OpportunityPriority(
+                opportunity_id=opportunity_id,
+                total_score=total_score,
+                priority_band=assign_priority_band(total_score, mandatory_present),
+                confidence_tier=assign_confidence_tier(
+                    requires_review,
+                    requires_normalisation_review,
+                ),
+                dimensions_scored=dimensions_scored,
+                dimensions_possible=SCORING_DIMENSIONS_POSSIBLE,
+                score_completeness_pct=completeness,
+            )
+        )
+    return priorities
 
 
 def _get_anthropic_client() -> Any:
@@ -527,10 +653,13 @@ def run_stage3_scoring() -> tuple[Stage3ScoreResult, list[DimensionScore]]:
             if score is not None:
                 scores_computed.append(score)
 
+    priorities = build_priorities(rows, scores_computed)
+
     result = Stage3ScoreResult(
         records_processed=total,
         scores_computed=len(scores_computed),
         dimension_reports=reports,
+        priorities=priorities,
         written_to_database=False,
     )
     return result, scores_computed
@@ -553,12 +682,30 @@ def _persist_stage3_scores(conn: Any, scores: list[DimensionScore]) -> None:
         )
 
 
+def _persist_priorities(conn: Any, priorities: list[OpportunityPriority]) -> None:
+    conn.execute(DELETE_PRIORITY_SQL)
+    for priority in priorities:
+        conn.execute(
+            INSERT_PRIORITY_SQL,
+            (
+                priority.opportunity_id,
+                priority.total_score,
+                priority.priority_band,
+                priority.confidence_tier,
+                priority.dimensions_scored,
+                priority.dimensions_possible,
+                priority.score_completeness_pct,
+            ),
+        )
+
+
 def run_stage3_scoring_write() -> Stage3ScoreResult:
-    """Compute all 6 dimension scores and persist to vc_opportunity_scores."""
+    """Compute all 6 dimension scores + priority bands and persist both tables."""
     result, scores_computed = run_stage3_scoring()
     with get_database_connection() as conn:
         try:
             _persist_stage3_scores(conn, scores_computed)
+            _persist_priorities(conn, result.priorities)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -588,6 +735,10 @@ def print_stage3_score_report(result: Stage3ScoreResult) -> None:
     _print_metric("Total records processed", result.records_processed)
     label = "Score rows inserted (6 dimensions)" if result.written_to_database else "Score rows computed (not written)"
     _print_metric(label, result.scores_computed)
+    priority_label = (
+        "Priority rows inserted" if result.written_to_database else "Priority rows computed (not written)"
+    )
+    _print_metric(priority_label, len(result.priorities))
 
     for dimension in STAGE3_DIMENSIONS:
         report = result.dimension_reports[dimension]
@@ -605,6 +756,33 @@ def print_stage3_score_report(result: Stage3ScoreResult) -> None:
         else:
             for example in report.example_reasoning:
                 print(f"  - {example}")
+
+    _print_section("Priority bands")
+    band_counts = result.band_counts
+    for band in ("High", "Medium", "Low", "Incomplete"):
+        _print_metric(f"{band} priority", band_counts[band])
+
+    _print_section("Score confidence")
+    confidence_counts = result.confidence_counts
+    for tier in ("High", "Medium", "Low"):
+        _print_metric(f"{tier} confidence", confidence_counts[tier])
+
+    _print_section("Top 10 opportunities by score")
+    top = sorted(
+        (p for p in result.priorities if p.priority_band != "Incomplete"),
+        key=lambda p: p.total_score,
+        reverse=True,
+    )[:10]
+    if not top:
+        print("  (none scored)")
+    else:
+        print(f"  {'opp_id':>6}  {'score':>5}  {'band':<10}  {'confidence':<10}  scored")
+        for p in top:
+            print(
+                f"  {p.opportunity_id:>6}  {p.total_score:>5}  "
+                f"{p.priority_band:<10}  {p.confidence_tier:<10}  "
+                f"{p.dimensions_scored}/{p.dimensions_possible}"
+            )
     print()
 
 

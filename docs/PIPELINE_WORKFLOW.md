@@ -256,7 +256,7 @@ flowchart TD
     end
 
     subgraph AI["AI-assisted scoring"]
-        D5["Traction (15 pts)\nMeasurable commercial signal?"]
+        D5["Traction (20 pts)\nMeasurable commercial signal?"]
         D6["Founder (15 pts)\nNamed verifiable credential?"]
     end
 
@@ -269,7 +269,7 @@ flowchart TD
     NULL -->|No| D1 & D2 & D3 & D4 & D5 & D6
     D1 & D2 & D3 & D4 & D5 & D6 --> WRITE
 
-    WRITE --> SUM["Sum points_awarded\n(planned → vc_opportunity_priority)"]
+    WRITE --> SUM["Sum points_awarded per opportunity\n→ vc_opportunity_priority\n(band + confidence_tier)"]
 ```
 
 ### Scoring matrix
@@ -279,18 +279,32 @@ flowchart TD
 | Sector | 25 | B2B SaaS, Enterprise AI, FinTech SaaS, HealthTech B2B, Supply Chain SaaS, Developer Tools, Cybersecurity, LegalTech, HR Tech | Deterministic |
 | Geography | 15 | United Kingdom, France, Germany, Spain, Netherlands, United States, Canada | Deterministic |
 | Stage | 15 | Seed or Series A (exact) | Deterministic |
-| Traction | 15 | Revenue figure, customer count, pilot count, or named metric (e.g. Growing ARR) | AI |
+| Traction | 20 | Revenue figure, customer count, pilot count, or named metric (e.g. Growing ARR) | AI |
 | Founder | 15 | Named company or institution (e.g. Ex-Stripe, Cambridge) | AI |
 | Referral | 10 | Warm intro or Partner referral | Deterministic |
 
-### Priority bands (planned — not yet implemented)
+### Priority bands
+
+Each opportunity's awarded points are summed into a single recommendation in `vc_opportunity_priority`.
 
 | Total score | Priority band |
 |-------------|---------------|
 | 75+ | High |
 | 50–74 | Medium |
 | Below 50 | Low |
-| Missing mandatory fields | Incomplete |
+| Missing a mandatory field (`sector`, `geography`, or `stage`) | Incomplete |
+
+**Mandatory fields:** an opportunity is marked **Incomplete** (not scored into a band) if `sector`, `geography`, or `stage` is missing after normalisation — these are the structural thesis fields, and without them the deal can't be fairly assessed. Strength signals (traction, founder, referral) simply score 0 when absent rather than forcing Incomplete.
+
+### Confidence tier
+
+Alongside the band, each priority row carries a `confidence_tier` that rates how much to trust the recommendation:
+
+| Tier | Meaning |
+|------|---------|
+| High | Fully deterministic, clean data — no review flags |
+| Medium | A value was AI-corrected during normalisation, but no review is outstanding |
+| Low | Flagged for analyst review (missing/ambiguous data, suspected duplicate, or sector pending inference) — recommendation is provisional |
 
 ---
 
@@ -338,11 +352,60 @@ FOR EACH opportunity IN vc_opportunities:
       ELSE:
           INSERT vc_opportunity_scores (points_awarded = 0, qualifies = 0)
 
-  # --- Stage 3 (planned) ---
+  # --- Stage 3: priority aggregation ---
   total = SUM(points_awarded)
-  band  = priority_band(total, mandatory_fields_present)
-  INSERT vc_opportunity_priority
+  band  = priority_band(total, mandatory_fields_present)   # High/Medium/Low/Incomplete
+  conf  = confidence_tier(requires_review, requires_normalisation_review)
+  INSERT vc_opportunity_priority (total, band, conf, dimensions_scored, completeness)
+
+
+# --- Stage 4: operational outputs (read-only) ---
+EXPORT prioritised_opportunities.csv   # ranked by band then score
+EXPORT analyst_review_queue.csv        # requires_review = 1, ordered by priority
+EXPORT duplicate_review_queue.csv      # suspected_duplicates joined to both companies
+EXPORT import_exceptions.csv           # rejected rows + reasons
+PRINT  recommendation summary          # band/confidence counts, top 10, queue sizes
 ```
+
+---
+
+## 6b. Stage 4 — operational outputs
+
+Stage 4 is read-only. It turns the scored data into analyst-ready artefacts. No new tables — outputs are derived views written as CSVs (open directly in Excel / Sheets) plus a terminal summary.
+
+```mermaid
+flowchart LR
+    subgraph SRC["Source tables"]
+        VO["vc_opportunities"]
+        PRI["vc_opportunity_priority"]
+        DUP["suspected_duplicates"]
+        EXC["vc_opportunity_exceptions"]
+    end
+
+    subgraph OUT["outputs/ (CSV)"]
+        O1["prioritised_opportunities.csv"]
+        O2["analyst_review_queue.csv"]
+        O3["duplicate_review_queue.csv"]
+        O4["import_exceptions.csv"]
+    end
+
+    SUMMARY["Terminal recommendation summary\n(band + confidence counts, top 10, queue sizes)"]
+
+    VO --> O1
+    PRI --> O1
+    VO --> O2
+    DUP --> O3
+    VO --> O3
+    EXC --> O4
+    SRC --> SUMMARY
+```
+
+| Output | Who uses it | Answers |
+|--------|-------------|---------|
+| `prioritised_opportunities.csv` | Investment team | "What should we look at first?" |
+| `analyst_review_queue.csv` | Data analyst | "What needs human attention before it can be trusted?" |
+| `duplicate_review_queue.csv` | Data analyst | "Which records might be the same company?" |
+| `import_exceptions.csv` | Data analyst | "What was rejected at import and why?" |
 
 ---
 
@@ -390,5 +453,5 @@ flowchart TD
 | Analyst review flags | Done |
 | Stage 2 normalisation + audit trail | Done |
 | Stage 3 dimension scoring (6 dimensions) | Done (terminal by default; `--write` to persist) |
-| Priority band → `vc_opportunity_priority` | **Not yet built** |
-| Stage 4 operational outputs / review queues | **Not yet built** |
+| Priority band + confidence → `vc_opportunity_priority` | Done (written with `--write`) |
+| Stage 4 operational outputs / review queues | Done (CSV exports + summary) |

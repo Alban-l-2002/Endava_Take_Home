@@ -20,7 +20,7 @@ Supporting modules:
 | `classification_rules.py` | Configurable rules for Valid / Incomplete / Ambiguous / Invalid classification |
 | `validators.py` | Validation logic that applies those rules to raw records |
 
-**Current scope:** Stages 1–3 are implemented (import, validation, routing, duplicate detection, normalisation with AI fallback/inference, and 6-dimension scoring). Priority assignment and Stage 4 outputs are planned but not yet built. See [docs/PIPELINE_WORKFLOW.md](docs/PIPELINE_WORKFLOW.md) for the full workflow artefact.
+**Current scope:** All four stages are implemented — import, validation, routing, duplicate detection, normalisation with AI fallback/inference, 6-dimension scoring, priority bands with confidence ratings, and analyst-ready CSV outputs. See [docs/PIPELINE_WORKFLOW.md](docs/PIPELINE_WORKFLOW.md) for the full workflow artefact.
 
 ## Workflow & decision logic
 
@@ -97,14 +97,32 @@ python -m src.stage4_outputs
 
 Stage 1 imports the CSV only when `raw_import` is empty. Subsequent runs classify existing staged data without re-importing.
 
+## Outputs
+
+Stage 4 writes analyst-ready CSV exports to `outputs/`:
+
+| File | Purpose |
+|------|---------|
+| `prioritised_opportunities.csv` | All opportunities ranked by priority band then score |
+| `analyst_review_queue.csv` | Records flagged for human review, by priority |
+| `duplicate_review_queue.csv` | Suspected duplicate pairs, side by side |
+| `import_exceptions.csv` | Rows rejected at import, with reasons |
+
+To populate the database and generate outputs end to end:
+
+```bash
+python -m src.main --write-scores
+```
+
+Or step by step:
+
+```bash
+python -m src.main --stage 3 --write-scores   # writes scores + priority bands
+python -m src.main --stage 4                   # generates CSV exports + summary
+```
+
 ## Current limitations
 
-- Priority bands (`vc_opportunity_priority`) and Stage 4 outputs are not yet implemented.
-- Stage 3 scores are terminal-only by default; pass `--write-scores` to persist to the database.
+- Stage 3 scores are terminal-only by default; pass `--write-scores` to persist scores and priority. Stage 4 needs persisted data to produce non-empty exports.
 - AI calls (sector inference, normalisation fallback, traction/founder scoring) require `ANTHROPIC_API_KEY` in `.env`.
 - Re-import is skipped if `raw_import` already contains records unless `--rebuild` is used.
-
-## Remaining work
-
-- **Stage 3 (remaining):** aggregate dimension scores into priority bands.
-- **Stage 4:** operational outputs and analyst review queues.

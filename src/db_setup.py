@@ -117,6 +117,8 @@ CREATE TABLE IF NOT EXISTS vc_opportunity_priority (
     total_score INTEGER NOT NULL,
     priority_band TEXT NOT NULL
         CHECK (priority_band IN ('High', 'Medium', 'Low', 'Incomplete')),
+    confidence_tier TEXT NOT NULL DEFAULT 'High'
+        CHECK (confidence_tier IN ('High', 'Medium', 'Low')),
     dimensions_scored INTEGER NOT NULL,
     dimensions_possible INTEGER NOT NULL DEFAULT 6,
     score_completeness_pct REAL,
@@ -124,6 +126,14 @@ CREATE TABLE IF NOT EXISTS vc_opportunity_priority (
     FOREIGN KEY (opportunity_id) REFERENCES vc_opportunities (opportunity_id)
 );
 """
+
+# Additive, idempotent column migrations: {table_name: {column_name: column_definition}}.
+# Lets the schema evolve without a destructive rebuild (and without losing existing rows).
+_COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
+    "vc_opportunity_priority": {
+        "confidence_tier": "TEXT NOT NULL DEFAULT 'High'",
+    },
+}
 
 REBUILD_PIPELINE_TABLES_SQL = """
 DROP TABLE IF EXISTS vc_opportunity_priority;
@@ -142,10 +152,25 @@ def get_database_connection() -> sqlite3.Connection:
     return conn
 
 
+def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {row[1] for row in rows}
+
+
+def _apply_column_migrations(conn: sqlite3.Connection) -> None:
+    """Add any missing columns to existing tables (safe, additive, idempotent)."""
+    for table, columns in _COLUMN_MIGRATIONS.items():
+        present = _existing_columns(conn, table)
+        for column, definition in columns.items():
+            if column not in present:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def create_database() -> None:
-    """Create pipeline tables if they do not already exist."""
+    """Create pipeline tables if they do not already exist, then apply migrations."""
     with get_database_connection() as conn:
         conn.executescript(CREATE_TABLES_SQL)
+        _apply_column_migrations(conn)
         conn.commit()
 
 

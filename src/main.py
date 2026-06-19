@@ -45,7 +45,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--write-scores",
         action="store_true",
-        help="Stage 3: persist scores to vc_opportunity_scores (default: terminal report only).",
+        help=(
+            "Stage 3: persist scores and priority bands to the database "
+            "(default: terminal report only). Required for Stage 4 outputs to have data."
+        ),
     )
     parser.add_argument(
         "--rebuild",
