@@ -415,21 +415,36 @@ def run_stage2_normalisation_write(
         row for row in rows if _needs_sector_inference(row[4], row[1])
     ]
     inference_total = len(inference_rows)
-    log(f"Step 3/4: Sector inference ({inference_total} records)...")
+
+    # Descriptions repeat heavily among inference candidates, so infer once per
+    # unique description and reuse the result. Mirrors the dedup already used for
+    # traction/founder scoring and stage/geography AI fallback.
+    unique_descriptions: list[str] = sorted(
+        {_display_raw(row[1]) for row in inference_rows},
+        key=str.casefold,
+    )
+    unique_total = len(unique_descriptions)
+    log(
+        f"Step 3/4: Sector inference ({inference_total} records → "
+        f"{unique_total} unique descriptions → {unique_total} API calls)..."
+    )
 
     sector_cache: dict[int, FieldResolution] = {}
     if inference_total == 0:
         log("  Skipped — no records need sector inference.")
     else:
-        for index, row in enumerate(inference_rows, start=1):
-            opportunity_id = row[0]
-            description = row[1]
-            sector_cache[opportunity_id] = infer_sector_from_description(
-                description,
-                client=client,
-                model=model,
+        description_resolution_cache: dict[str, FieldResolution] = {}
+        for index, description in enumerate(unique_descriptions, start=1):
+            description_resolution_cache[_lookup_key(description)] = (
+                infer_sector_from_description(
+                    description,
+                    client=client,
+                    model=model,
+                )
             )
-            log(f"  Sector inference: {index}/{inference_total}")
+            log(f"  Sector inference: {index}/{unique_total} — {description!r}")
+        for row in inference_rows:
+            sector_cache[row[0]] = description_resolution_cache[_lookup_key(row[1])]
         log("  Sector inference complete.")
 
     log(f"Step 4/4: Writing results to database ({total_records} records)...")
